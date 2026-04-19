@@ -257,12 +257,16 @@ async def _require_dod_comment_for_done(
     """
     if update.previous_status == "done" or update.task.status != "done":
         return
-    # Human admin users may bypass by including "PO accepts:" or "PO override:" in the
-    # move comment — this is the intended signal from Jeff's mc-api.sh workflow.
+    # Emergency override: only a human admin, only with `PO override:` prefix, only with a
+    # non-empty reason after the colon. A PO saying "Grok accepts" is NOT sufficient and
+    # will not bypass this gate — Grok verdicts are produced exclusively by grok-review.py.
+    # (Decision: 2026-04-19, Jeff Sutherland.)
     if update.actor.actor_type == "user":
-        po_comment = (update.comment or "").strip().lower()
-        if po_comment.startswith(("po accepts:", "po override:")):
-            return
+        po_comment = (update.comment or "").strip()
+        if po_comment.lower().startswith("po override:"):
+            reason_text = po_comment.split(":", 1)[1].strip()
+            if len(reason_text) >= 10:
+                return
 
     result = await session.exec(
         select(ActivityEvent)
@@ -272,13 +276,19 @@ async def _require_dod_comment_for_done(
     )
     comments = result.all()
 
-    # Compiled patterns (mirrors mc-dod-validator.sh logic)
+    # Real grok-review.py output has a fixed fingerprint. ALL of these must be present
+    # in the same comment to count as a legitimate Grok Accept — anything less is
+    # treated as a spoof (agents have historically written bare "🦅 PO ACCEPT:" or
+    # "grok reviewed" text to self-approve).
     _grok_header = re.compile(r"🦅.*GROK\s+REVIEW|GROK\s+REVIEW", re.IGNORECASE)
+    _grok_secrets = re.compile(r"Secrets:\s*\[?(CLEAN|BLOCKED)\]?", re.IGNORECASE)
+    _grok_moat = re.compile(r"MOAT:\s*\[?\d+:\d+:\d+:\d+:\d+\]?\s*/\s*15", re.IGNORECASE)
+    _grok_footer = re.compile(r"Automated review via Grok API", re.IGNORECASE)
     _grok_accept = re.compile(
-        r"Status:\s*Accept|\bAccept\b.*verdict|verdict.*\bAccept\b|\[accept\]", re.IGNORECASE
+        r"Status:\s*\[?Accept\]?|\bAccept\b.*verdict|verdict.*\bAccept\b", re.IGNORECASE
     )
     _grok_reject = re.compile(
-        r"Status:\s*Reject|\bReject\b.*verdict|verdict.*\bReject\b|\[reject\]", re.IGNORECASE
+        r"Status:\s*\[?Reject\]?|\bReject\b.*verdict|verdict.*\bReject\b", re.IGNORECASE
     )
     _human_po = re.compile(r"Jeff|Sutherland|1510884737|U02N7GB4JFR", re.IGNORECASE)
     _reject_kw = re.compile(
@@ -286,9 +296,20 @@ async def _require_dod_comment_for_done(
         re.IGNORECASE,
     )
 
+    def _is_real_grok_output(msg: str) -> bool:
+        """Match the full grok-review.py comment fingerprint — header + Secrets + MOAT + footer."""
+        return bool(
+            _grok_header.search(msg)
+            and _grok_secrets.search(msg)
+            and _grok_moat.search(msg)
+            and _grok_footer.search(msg)
+        )
+
     # Check 1: human PO rejection is a hard block regardless of Grok
     for c in comments:
         msg = c.message or ""
+        if _is_real_grok_output(msg):
+            continue  # don't match Grok's own "Status: Reject" as a human PO rejection
         if _human_po.search(msg) and _reject_kw.search(msg):
             await _auto_log_dod_rejection(
                 update=update,
@@ -303,15 +324,13 @@ async def _require_dod_comment_for_done(
             )
 
     # Check 2+3: track the latest Grok verdict across all comments.
-    # Only trust comments that have the 🦅 GROK REVIEW header AND the Secrets:/MOAT:/Status:
-    # fields — the canonical output format of grok-review.py.
-    # "grok reviewed" alone is NOT accepted: agents fabricate that phrase to spoof the gate.
-    _grok_secrets = re.compile(r"Secrets:\s*\[?(CLEAN|BLOCKED)\]?", re.IGNORECASE)
+    # Only trust comments that carry the full grok-review.py fingerprint —
+    # header + Secrets + MOAT + footer. Partial matches (e.g. "🦅 GROK REVIEW" alone,
+    # or "Secrets: CLEAN" on its own) are rejected as spoof attempts.
     latest_verdict: str | None = None  # "accept" | "reject" | None
     for c in comments:
         msg = c.message or ""
-        # Require the header AND the Secrets: field to confirm this is real grok-review.py output
-        if not (_grok_header.search(msg) and _grok_secrets.search(msg)):
+        if not _is_real_grok_output(msg):
             continue
         if _grok_accept.search(msg):
             latest_verdict = "accept"

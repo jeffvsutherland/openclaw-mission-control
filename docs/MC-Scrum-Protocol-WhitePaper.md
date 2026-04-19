@@ -114,8 +114,8 @@ Writes a `🚫 [Server DoD Gate] BLOCKED — <reason>` comment via an isolated D
 Called from **both** `_apply_lead_task_update` (lead agent path) and `_finalize_updated_task` (non-lead agent + admin path). Logic:
 
 1. **Skip** if not a →`done` transition (`previous_status == "done"` or `task.status != "done"`).
-2. **Allow** if actor is a human admin user (`actor_type == "user"`) AND the move comment starts with `"PO accepts:"` or `"PO override:"` — this is the signal from Jeff's `mc-api.sh move done "PO accepts: reason"` workflow.
-3. **Hard-block** if any comment authored by a human (matching Jeff's identity patterns) contains rejection keywords — human PO rejections are final.
+2. **Emergency bypass only:** allow if `actor_type == "user"` AND comment starts with `"PO override:"` AND the reason text after the colon is ≥10 characters. `"PO accepts:"` no longer bypasses — a human PO cannot speak for Grok.
+3. **Hard-block** if any comment authored by a human (matching Jeff's identity patterns) contains rejection keywords. When scanning, skip comments that match the full Grok fingerprint so Grok's own `Status: Reject` cannot trigger the human-PO-rejection branch.
 4. **Hard-block** if the **latest** Grok verdict comment is `Reject` (tracks across comment history, so a re-review Accept after a Reject is respected).
 5. **Hard-block** if no Grok Accept verdict exists at all.
 
@@ -128,27 +128,40 @@ await _require_dod_comment_for_done(session, update=update)
 await _require_dod_comment_for_done(session, update=update)
 ```
 
-**Grok Accept patterns matched** (ALL three must appear in the same comment):
+**Grok fingerprint — ALL FOUR markers required in the same comment (plus a Status line):**
 ```
 Header:   🦅.*GROK REVIEW  |  GROK REVIEW
-Secrets:  Secrets: [CLEAN]  |  Secrets: [BLOCKED]   ← confirms real grok-review.py output
-Verdict:  Status: Accept  |  verdict.*Accept  |  Accept.*verdict  |  [accept]
+Secrets:  Secrets: [CLEAN]  |  Secrets: [BLOCKED]
+MOAT:     MOAT: [T:C:D:A:L]/15             (five colon-separated integers, /15 denominator)
+Footer:   Automated review via Grok API
++ Status: Status: Accept | Status: Reject | Status: Changes
 ```
 
-**Important:** `"grok reviewed"` alone is NOT accepted. Agents fabricate that phrase to spoof
-the gate (observed 2026-04-19, PRODUCT: Sprint 44 ASF v4.0 Launch). The `Secrets:` field is
-the distinguishing marker — only real `grok-review.py` output contains it.
+`grok-review.py` emits all four markers in its `post_comment` payload. A comment missing
+any one of them is treated as a spoof and ignored.
+
+**Known spoof patterns rejected by the current gate:**
+- `"🦅 PO ACCEPT: ..."` written by an agent (observed 2026-04-19, multiple stories)
+- `"grok reviewed — Status: Accept"` prose without Secrets/MOAT/footer
+- `"🦅 GROK REVIEW\nSecrets: CLEAN\nStatus: Accept"` without MOAT line or footer
+- A human PO comment claiming `"Grok accepts this story"` — PO cannot speak for Grok
 
 **Latest verdict wins:** When checking done eligibility, iterate ALL comments in chronological
 order and track the last Grok verdict. A Reject after an Accept overrides the Accept (observed
 2026-04-19, REVENUE: ClawMart Traffic & Conversion — old Accept in comment 1, 37 Rejects in
 comments 12–48, story incorrectly landed in done).
 
-**PO accepts are not sufficient for done:** Human PO accepts (`mc-api.sh move done "PO accepts: reason"`)
-do NOT substitute for Grok review. Stories accepted by PO without a Grok review must be returned
-to inbox for proper review before closing. Decision: 2026-04-19, Jeff Sutherland.
+**PO cannot speak for Grok (hard rule):** Human PO accepts do NOT substitute for Grok review.
+The `"PO accepts:"` bypass was removed 2026-04-19. Only `"PO override:"` with a substantive
+reason string (≥10 chars after the colon) is honored, and only for `actor_type == "user"`.
+Every use of `PO override:` leaves an audit trail (the override comment itself). Decision:
+2026-04-19, Jeff Sutherland.
 
-**PO override bypass:** Only triggers if `actor_type == "user"` AND comment starts with `"PO accepts:"` or `"PO override:"`. Agent-written "PO Accept:" comments do NOT qualify — check `agent_id is None` when auditing done stories.
+**Auditing done stories:** Agent-written `"PO Accept:"` comments (where `agent_id IS NOT NULL`)
+do NOT qualify as human PO accepts either — they are self-approval spoofs. When auditing,
+a legitimate done requires:
+- A comment with the full Grok fingerprint and `Status: Accept`, latest among Grok comments, OR
+- A human `"PO override:"` comment (agent_id IS NULL, user actor) with ≥10-char reason.
 
 **Verification:**
 ```bash
