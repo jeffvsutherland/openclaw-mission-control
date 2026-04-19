@@ -235,3 +235,10 @@ webhook_ingest_limiter: RateLimiter = create_rate_limiter(
     max_requests=60,
     window_seconds=60.0,
 )
+# Agent mc-api endpoints: 120 requests per 60 seconds per IP.
+# Protects board/task listing and mutation endpoints from abuse.
+mc_api_limiter: RateLimiter = create_rate_limiter(
+    namespace="mc_api",
+    max_requests=120,
+    window_seconds=60.0,
+)

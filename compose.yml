@@ -16,6 +16,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -26,6 +27,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   backend:
     build:
@@ -45,6 +47,10 @@ services:
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       BASE_URL: ${BASE_URL:-http://localhost:8000}
       RQ_REDIS_URL: redis://redis:6379/0
+      OPENCLAW_OPERATOR_TOKEN: ${OPENCLAW_OPERATOR_TOKEN:-}
+      OPENCLAW_PAIRED_JSON: ${OPENCLAW_PAIRED_JSON:-/home/node/.openclaw/devices/paired.json}
+    volumes:
+      - /Users/jeffsutherland/clawd/ASF-15-docker/openclaw-state:/home/node/.openclaw:ro
     depends_on:
       db:
         condition: service_healthy
@@ -52,6 +58,16 @@ services:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - default
+      - asf-network
 
   frontend:
     build:
@@ -72,6 +88,7 @@ services:
       - backend
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    restart: unless-stopped
     develop:
       watch:
         # Rebuild frontend image when UI source or build config changes.
@@ -112,7 +129,18 @@ services:
       RQ_QUEUE_NAME: ${RQ_QUEUE_NAME:-default}
       RQ_DISPATCH_THROTTLE_SECONDS: ${RQ_DISPATCH_THROTTLE_SECONDS:-2.0}
       RQ_DISPATCH_MAX_RETRIES: ${RQ_DISPATCH_MAX_RETRIES:-3}
+      OPENCLAW_OPERATOR_TOKEN: ${OPENCLAW_OPERATOR_TOKEN:-}
+      OPENCLAW_PAIRED_JSON: ${OPENCLAW_PAIRED_JSON:-/home/node/.openclaw/devices/paired.json}
+    volumes:
+      - /Users/jeffsutherland/clawd/ASF-15-docker/openclaw-state:/home/node/.openclaw:ro
     restart: unless-stopped
 
 volumes:
   postgres_data:
+
+networks:
+  default:
+    name: openclaw-mission-control_default
+  asf-network:
+    external: true
+    name: asf-network

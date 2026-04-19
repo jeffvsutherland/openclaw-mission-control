@@ -29,7 +29,7 @@ class BoardBase(SQLModel):
     target_date: datetime | None = None
     goal_confirmed: bool = False
     goal_source: str | None = None
-    require_approval_for_done: bool = True
+    require_approval_for_done: bool = False
     require_review_before_done: bool = False
     comment_required_for_review: bool = False
     block_status_changes_with_pending_approval: bool = False

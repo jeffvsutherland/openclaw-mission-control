@@ -39,7 +39,7 @@ class Board(TenantScoped, table=True):
     target_date: datetime | None = None
     goal_confirmed: bool = Field(default=False)
     goal_source: str | None = None
-    require_approval_for_done: bool = Field(default=True)
+    require_approval_for_done: bool = Field(default=False)
     require_review_before_done: bool = Field(default=False)
     comment_required_for_review: bool = Field(default=False)
     block_status_changes_with_pending_approval: bool = Field(default=False)

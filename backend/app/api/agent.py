@@ -7,7 +7,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func
 from sqlmodel import SQLModel, col, select
 
@@ -18,6 +18,8 @@ from app.api import board_onboarding as onboarding_api
 from app.api import tasks as tasks_api
 from app.api.deps import ActorContext, get_board_or_404, get_task_or_404
 from app.core.agent_auth import AgentAuthContext, get_agent_auth_context
+from app.core.client_ip import get_client_ip
+from app.core.rate_limit import mc_api_limiter
 from app.db.pagination import paginate
 from app.db.session import get_session
 from app.models.agents import Agent
@@ -358,6 +360,7 @@ def agent_healthz(
     },
 )
 async def list_boards(
+    request: Request,
     session: AsyncSession = SESSION_DEP,
     agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> LimitOffsetPage[BoardRead]:
@@ -366,6 +369,9 @@ async def list_boards(
     Board-scoped agents typically see only their assigned board.
     Main agents may see multiple boards when permitted by auth scope.
     """
+    client_ip = get_client_ip(request)
+    if not await mc_api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
     statement = select(Board)
     if agent_ctx.agent.board_id:
         statement = statement.where(col(Board.id) == agent_ctx.agent.board_id)
@@ -565,6 +571,7 @@ async def list_agents(
     ),
 )
 async def list_tasks(
+    request: Request,
     filters: AgentTaskListFilters = TASK_LIST_FILTERS_DEP,
     board: Board = BOARD_DEP,
     session: AsyncSession = SESSION_DEP,
@@ -576,6 +583,9 @@ async def list_tasks(
     - worker: fetch assigned inbox/in-progress tasks
     - lead: fetch unassigned inbox tasks for delegation
     """
+    client_ip = get_client_ip(request)
+    if not await mc_api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
     _guard_board_access(agent_ctx, board)
     return await tasks_api.list_tasks(
         status_filter=filters.status_filter,
@@ -778,6 +788,7 @@ async def get_webhook_payload(
     },
 )
 async def create_task(
+    request: Request,
     payload: TaskCreate,
     board: Board = BOARD_DEP,
     session: AsyncSession = SESSION_DEP,
@@ -788,6 +799,9 @@ async def create_task(
     Lead-only endpoint. Supports dependency-aware creation via
     `depends_on_task_ids`, optional `tag_ids`, and `custom_field_values`.
     """
+    client_ip = get_client_ip(request)
+    if not await mc_api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
     _guard_board_access(agent_ctx, board)
     _require_board_lead(agent_ctx)
     data = payload.model_dump(
@@ -922,6 +936,7 @@ async def create_task(
     ),
 )
 async def update_task(
+    request: Request,
     payload: TaskUpdate,
     task: Task = TASK_DEP,
     session: AsyncSession = SESSION_DEP,
@@ -931,6 +946,9 @@ async def update_task(
 
     Supports status, assignment, dependencies, and optional inline comment.
     """
+    client_ip = get_client_ip(request)
+    if not await mc_api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
     _guard_task_access(agent_ctx, task)
     return await tasks_api.update_task(
         payload=payload,
@@ -1043,6 +1061,7 @@ async def list_task_comments(
     ),
 )
 async def create_task_comment(
+    request: Request,
     payload: TaskCommentCreate,
     task: Task = TASK_DEP,
     session: AsyncSession = SESSION_DEP,
@@ -1052,6 +1071,9 @@ async def create_task_comment(
 
     This is the primary collaboration/log surface for task progress.
     """
+    client_ip = get_client_ip(request)
+    if not await mc_api_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS)
     _guard_task_access(agent_ctx, task)
     return await tasks_api.create_task_comment(
         payload=payload,

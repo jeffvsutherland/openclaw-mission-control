@@ -29,6 +29,7 @@ class TaskBase(SQLModel):
     priority: str = "medium"
     due_at: datetime | None = None
     assigned_agent_id: UUID | None = None
+    story_points: int | None = None
     depends_on_task_ids: list[UUID] = Field(default_factory=list)
     tag_ids: list[UUID] = Field(default_factory=list)
 
@@ -49,6 +50,7 @@ class TaskUpdate(SQLModel):
     priority: str | None = None
     due_at: datetime | None = None
     assigned_agent_id: UUID | None = None
+    story_points: int | None = None
     depends_on_task_ids: list[UUID] | None = None
     tag_ids: list[UUID] | None = None
     custom_field_values: TaskCustomFieldValues | None = None

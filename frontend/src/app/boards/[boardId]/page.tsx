@@ -1148,6 +1148,7 @@ export default function BoardDetailPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editStatus, setEditStatus] = useState<TaskStatus>("inbox");
   const [editPriority, setEditPriority] = useState("medium");
+  const [editStoryPoints, setEditStoryPoints] = useState<number | null>(null);
   const [editDueDate, setEditDueDate] = useState("");
   const [editAssigneeId, setEditAssigneeId] = useState("");
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
@@ -1652,6 +1653,7 @@ export default function BoardDetailPage() {
       setEditDescription("");
       setEditStatus("inbox");
       setEditPriority("medium");
+      setEditStoryPoints(null);
       setEditDueDate("");
       setEditAssigneeId("");
       setEditTagIds([]);
@@ -1666,6 +1668,7 @@ export default function BoardDetailPage() {
     setEditDescription(selectedTask.description ?? "");
     setEditStatus(selectedTask.status);
     setEditPriority(selectedTask.priority);
+    setEditStoryPoints((selectedTask as any).story_points ?? null);
     setEditDueDate(toLocalDateInput(selectedTask.due_at));
     setEditAssigneeId(selectedTask.assigned_agent_id ?? "");
     setEditTagIds(selectedTask.tag_ids ?? []);
@@ -2682,7 +2685,8 @@ export default function BoardDetailPage() {
         status: editStatus,
         priority: editPriority,
         assigned_agent_id: editAssigneeId || null,
-      };
+        story_points: editStoryPoints,
+      } as BoardTaskUpdatePayload;
 
       if (depsChanged && selectedTask.status !== "done") {
         updatePayload.depends_on_task_ids = editDependsOnTaskIds;
@@ -2759,6 +2763,7 @@ export default function BoardDetailPage() {
     setEditDescription(selectedTask.description ?? "");
     setEditStatus(selectedTask.status);
     setEditPriority(selectedTask.priority);
+    setEditStoryPoints((selectedTask as any).story_points ?? null);
     setEditDueDate(toLocalDateInput(selectedTask.due_at));
     setEditAssigneeId(selectedTask.assigned_agent_id ?? "");
     setEditTagIds(selectedTask.tag_ids ?? []);
@@ -3145,8 +3150,8 @@ export default function BoardDetailPage() {
                   <Button
                     onClick={() => setIsDialogOpen(true)}
                     className="h-9 w-9 p-0"
-                    aria-label="New task"
-                    title={canWrite ? "New task" : "Read-only access"}
+                    aria-label="New story"
+                    title={canWrite ? "New story" : "Read-only access"}
                     disabled={!canWrite}
                   >
                     <Plus className="h-4 w-4" />
@@ -3560,7 +3565,7 @@ export default function BoardDetailPage() {
                             size="sm"
                             onClick={() => setIsDialogOpen(true)}
                             disabled={isCreating || !canWrite}
-                            title={canWrite ? "New task" : "Read-only access"}
+                            title={canWrite ? "New story" : "Read-only access"}
                           >
                             New task
                           </Button>
@@ -3700,7 +3705,7 @@ export default function BoardDetailPage() {
                 onClick={() => setIsEditDialogOpen(true)}
                 className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-50"
                 disabled={!selectedTask || !canWrite}
-                title={canWrite ? "Edit task" : "Read-only access"}
+                title={canWrite ? "Edit story" : "Read-only access"}
               >
                 <Pencil className="h-4 w-4" />
               </button>
@@ -3822,7 +3827,7 @@ export default function BoardDetailPage() {
                     : hasDependencies
                       ? "Dependencies resolved."
                       : hasResolvedDependencies
-                        ? "This task resolves these tasks."
+                        ? "This story resolves these stories."
                         : null;
 
                 return (
@@ -3857,7 +3862,7 @@ export default function BoardDetailPage() {
                 <p className="text-sm text-slate-500">Loading approvals…</p>
               ) : taskApprovals.length === 0 ? (
                 <p className="text-sm text-slate-500">
-                  No approvals tied to this task.{" "}
+                  No approvals tied to this story.{" "}
                   {pendingApprovals.length > 0
                     ? `${pendingApprovals.length} pending on this board.`
                     : "No pending approvals on this board."}
@@ -4066,7 +4071,7 @@ export default function BoardDetailPage() {
                 Live feed
               </p>
               <p className="mt-1 text-sm font-medium text-slate-900">
-                Realtime task, approval, agent, and board-chat activity.
+                Realtime story, approval, agent, and board-chat activity.
               </p>
             </div>
             <button
@@ -4118,7 +4123,7 @@ export default function BoardDetailPage() {
                         item.title
                           ? item.title
                           : taskId
-                            ? (taskTitleById.get(taskId) ?? "Unknown task")
+                            ? (taskTitleById.get(taskId) ?? "Unknown story")
                             : "Activity"
                       }
                       authorName={authorName}
@@ -4137,11 +4142,11 @@ export default function BoardDetailPage() {
       </aside>
 
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent aria-label="Edit task">
+        <DialogContent aria-label="Edit story">
           <DialogHeader>
-            <DialogTitle>Edit task</DialogTitle>
+            <DialogTitle>Edit story</DialogTitle>
             <DialogDescription>
-              Update task details, priority, status, or assignment.
+              Update story details, priority, status, or assignment.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -4152,7 +4157,7 @@ export default function BoardDetailPage() {
               <Input
                 value={editTitle}
                 onChange={(event) => setEditTitle(event.target.value)}
-                placeholder="Task title"
+                placeholder="Story title"
                 disabled={!selectedTask || isSavingTask || !canWrite}
               />
             </div>
@@ -4163,7 +4168,7 @@ export default function BoardDetailPage() {
               <Textarea
                 value={editDescription}
                 onChange={(event) => setEditDescription(event.target.value)}
-                placeholder="Task details"
+                placeholder="Story details"
                 className="min-h-[140px]"
                 disabled={!selectedTask || isSavingTask || !canWrite}
               />
@@ -4225,6 +4230,24 @@ export default function BoardDetailPage() {
               </div>
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Story points
+                </label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={editStoryPoints ?? ""}
+                  onChange={(event) =>
+                    setEditStoryPoints(
+                      event.target.value ? Number(event.target.value) : null,
+                    )
+                  }
+                  placeholder="Points"
+                  disabled={!selectedTask || isSavingTask || !canWrite}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Due date
                 </label>
                 <Input
@@ -4260,7 +4283,7 @@ export default function BoardDetailPage() {
               </Select>
               {assignableAgents.length === 0 ? (
                 <p className="text-xs text-slate-500">
-                  Add agents to assign tasks.
+                  Add agents to assign stories.
                 </p>
               ) : null}
             </div>
@@ -4328,7 +4351,7 @@ export default function BoardDetailPage() {
                 Dependencies
               </label>
               <p className="text-xs text-slate-500">
-                Tasks stay blocked until every dependency is marked done.
+                Stories stay blocked until every dependency is marked done.
               </p>
               <DropdownSelect
                 ariaLabel="Add dependency"
@@ -4341,11 +4364,11 @@ export default function BoardDetailPage() {
                   selectedTask.status === "done" ||
                   !canWrite
                 }
-                emptyMessage="No other tasks found."
+                emptyMessage="No other stories found."
               />
               {selectedTask?.status === "done" ? (
                 <p className="text-xs text-slate-500">
-                  Dependencies can only be edited until the task is done.
+                  Dependencies can only be edited until the story is done.
                 </p>
               ) : null}
               {editDependsOnTaskIds.length === 0 ? (
@@ -4409,7 +4432,7 @@ export default function BoardDetailPage() {
               onClick={() => setIsDeleteDialogOpen(true)}
               disabled={!selectedTask || isSavingTask || !canWrite}
               className="border-rose-200 text-rose-600 hover:border-rose-300 hover:text-rose-700"
-              title={canWrite ? "Delete task" : "Read-only access"}
+              title={canWrite ? "Delete story" : "Read-only access"}
             >
               Delete task
             </Button>
@@ -4435,11 +4458,11 @@ export default function BoardDetailPage() {
       </Dialog>
 
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <DialogContent aria-label="Delete task">
+        <DialogContent aria-label="Delete story">
           <DialogHeader>
-            <DialogTitle>Delete task</DialogTitle>
+            <DialogTitle>Delete story</DialogTitle>
             <DialogDescription>
-              This removes the task permanently. This action cannot be undone.
+              This removes the story permanently. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           {deleteTaskError ? (
@@ -4460,7 +4483,7 @@ export default function BoardDetailPage() {
               disabled={isDeletingTask || !canWrite}
               className="bg-rose-600 text-white hover:bg-rose-700"
             >
-              {isDeletingTask ? "Deleting…" : "Delete task"}
+              {isDeletingTask ? "Deleting…" : "Delete story"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -4477,9 +4500,9 @@ export default function BoardDetailPage() {
       >
         <DialogContent aria-label={titleLabel}>
           <DialogHeader>
-            <DialogTitle>New task</DialogTitle>
+            <DialogTitle>New story</DialogTitle>
             <DialogDescription>
-              Add a task to the inbox and triage it when you are ready.
+              Add a story to the inbox and triage it when you are ready.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -4613,7 +4636,7 @@ export default function BoardDetailPage() {
               onClick={handleCreateTask}
               disabled={!canWrite || isCreating}
             >
-              {isCreating ? "Creating…" : "Create task"}
+              {isCreating ? "Creating…" : "Create story"}
             </Button>
           </DialogFooter>
         </DialogContent>

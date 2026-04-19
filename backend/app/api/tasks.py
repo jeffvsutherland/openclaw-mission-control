@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -215,6 +216,133 @@ async def _task_has_pending_linked_approval(
         task_ids=[task_id],
     )
     return task_id in conflicts
+
+
+async def _auto_log_dod_rejection(
+    *,
+    update: _TaskUpdateInput,
+    reason: str,
+) -> None:
+    """Persist a DoD rejection comment in an isolated DB session so it survives the 400 rollback."""
+    agent_id = update.actor.agent.id if update.actor.agent else None
+    message = f"🚫 [Server DoD Gate] BLOCKED — {reason}"
+    async with async_session_maker() as audit_session:
+        record_activity(
+            audit_session,
+            event_type="task.comment",
+            message=message,
+            agent_id=agent_id,
+            task_id=update.task.id,
+            board_id=update.board_id,
+        )
+        await audit_session.commit()
+
+
+async def _require_dod_comment_for_done(
+    session: AsyncSession,
+    *,
+    update: _TaskUpdateInput,
+) -> None:
+    """Server-side DoD gate: block all actors from moving a task to done without a Grok Accept.
+
+    Checks (in order):
+      1. Skip if not a →done transition.
+      2. Allow user/admin actors who include "PO accepts:" or "PO override:" in the move comment
+         (this is how Jeff's mc-api.sh `move done` command signals an intentional PO accept).
+      3. Hard-block if a human PO (Jeff) rejection comment is on record.
+      4. Hard-block if the latest Grok verdict is Reject.
+      5. Hard-block if no Grok Accept verdict exists at all.
+
+    On failure: writes an audit comment via an isolated session, then raises HTTP 400.
+    """
+    if update.previous_status == "done" or update.task.status != "done":
+        return
+    # Human admin users may bypass by including "PO accepts:" or "PO override:" in the
+    # move comment — this is the intended signal from Jeff's mc-api.sh workflow.
+    if update.actor.actor_type == "user":
+        po_comment = (update.comment or "").strip().lower()
+        if po_comment.startswith(("po accepts:", "po override:")):
+            return
+
+    result = await session.exec(
+        select(ActivityEvent)
+        .where(col(ActivityEvent.task_id) == update.task.id)
+        .where(col(ActivityEvent.event_type) == "task.comment")
+        .order_by(asc(col(ActivityEvent.created_at)))
+    )
+    comments = result.all()
+
+    # Compiled patterns (mirrors mc-dod-validator.sh logic)
+    _grok_header = re.compile(r"🦅.*GROK\s+REVIEW|GROK\s+REVIEW", re.IGNORECASE)
+    _grok_accept = re.compile(
+        r"Status:\s*Accept|\bAccept\b.*verdict|verdict.*\bAccept\b|\[accept\]", re.IGNORECASE
+    )
+    _grok_reject = re.compile(
+        r"Status:\s*Reject|\bReject\b.*verdict|verdict.*\bReject\b|\[reject\]", re.IGNORECASE
+    )
+    _human_po = re.compile(r"Jeff|Sutherland|1510884737|U02N7GB4JFR", re.IGNORECASE)
+    _reject_kw = re.compile(
+        r"\bREJECT\b|returned.*no.*deliverable|moved to review prematurely|wrong path|path violation",
+        re.IGNORECASE,
+    )
+
+    # Check 1: human PO rejection is a hard block regardless of Grok
+    for c in comments:
+        msg = c.message or ""
+        if _human_po.search(msg) and _reject_kw.search(msg):
+            await _auto_log_dod_rejection(
+                update=update,
+                reason="Human PO (Jeff) rejection on record — story requires re-work before closing.",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "DoD violation: Human PO rejection on record. "
+                    "Story must be re-worked before it can close."
+                ),
+            )
+
+    # Check 2+3: track the latest Grok verdict across all comments.
+    # Only trust comments that have the 🦅 GROK REVIEW header AND the Secrets:/MOAT:/Status:
+    # fields — the canonical output format of grok-review.py.
+    # "grok reviewed" alone is NOT accepted: agents fabricate that phrase to spoof the gate.
+    _grok_secrets = re.compile(r"Secrets:\s*\[?(CLEAN|BLOCKED)\]?", re.IGNORECASE)
+    latest_verdict: str | None = None  # "accept" | "reject" | None
+    for c in comments:
+        msg = c.message or ""
+        # Require the header AND the Secrets: field to confirm this is real grok-review.py output
+        if not (_grok_header.search(msg) and _grok_secrets.search(msg)):
+            continue
+        if _grok_accept.search(msg):
+            latest_verdict = "accept"
+        elif _grok_reject.search(msg):
+            latest_verdict = "reject"
+
+    if latest_verdict == "reject":
+        await _auto_log_dod_rejection(
+            update=update,
+            reason="Latest Grok verdict is Reject — re-submit for Grok review after fixing.",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "DoD violation: Latest Grok verdict is Reject. "
+                "Fix the reported issues and re-run Grok review before closing."
+            ),
+        )
+
+    if latest_verdict != "accept":
+        await _auto_log_dod_rejection(
+            update=update,
+            reason="No Grok Accept verdict found — story has not been reviewed.",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "DoD violation: No Grok Accept verdict in comments. "
+                "Run grok-review before moving this story to done."
+            ),
+        )
 
 
 async def _require_approved_linked_approval_for_done(
@@ -2300,6 +2428,7 @@ async def _apply_lead_task_update(
         previous_status=update.previous_status,
         target_status=update.task.status,
     )
+    await _require_dod_comment_for_done(session, update=update)
 
     if normalized_tag_ids is not None:
         await replace_tags(
@@ -2371,9 +2500,15 @@ async def _apply_non_lead_agent_task_rules(
             code="task_assignee_mismatch",
             message="Agents can only change status on tasks assigned to them.",
         )
-    # Agents are limited to status/comment updates, and non-inbox status moves
-    # must pass dependency checks before they can proceed.
-    allowed_fields = {"status", "comment", "custom_field_values"}
+    # Agents are limited to status/comment updates and self-assignment.
+    # Non-inbox status moves must pass dependency checks before they can proceed.
+    allowed_fields = {"status", "comment", "custom_field_values", "assigned_agent_id"}
+    # Check if this is a self-assignment (agent assigning task to themselves)
+    is_self_assign = (
+        "assigned_agent_id" in update.updates
+        and update.actor.agent
+        and str(update.updates.get("assigned_agent_id")) == str(update.actor.agent.id)
+    )
     if (
         update.depends_on_task_ids is not None
         or update.tag_ids is not None
@@ -2383,7 +2518,13 @@ async def _apply_non_lead_agent_task_rules(
     ):
         raise _task_update_forbidden_error(
             code="task_update_field_forbidden",
-            message="Agents may only update status, comment, and custom field values.",
+            message="Agents may only update status, comment, custom field values, and self-assign tasks.",
+        )
+    # Block assignment to OTHER agents (only self-assignment allowed)
+    if "assigned_agent_id" in update.updates and not is_self_assign:
+        raise _task_update_forbidden_error(
+            code="task_update_field_forbidden",
+            message="Agents may only assign tasks to themselves (self-assignment).",
         )
     if "status" in update.updates:
         only_lead_can_change_status = (
@@ -2685,6 +2826,7 @@ async def _finalize_updated_task(
         previous_status=update.previous_status,
         target_status=update.task.status,
     )
+    await _require_dod_comment_for_done(session, update=update)
     update.task.updated_at = utcnow()
 
     status_raw = update.updates.get("status")
