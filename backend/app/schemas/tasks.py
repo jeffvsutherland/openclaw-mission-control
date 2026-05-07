@@ -34,11 +34,22 @@ class TaskBase(SQLModel):
     tag_ids: list[UUID] = Field(default_factory=list)
 
 
+MAX_STORY_POINTS = 5
+_POINTS_ERROR = f"story_points must be {MAX_STORY_POINTS} or fewer — split into smaller stories"
+
+
 class TaskCreate(TaskBase):
     """Payload for creating a task."""
 
     created_by_user_id: UUID | None = None
     custom_field_values: TaskCustomFieldValues = Field(default_factory=dict)
+
+    @field_validator("story_points", mode="before")
+    @classmethod
+    def cap_story_points(cls, value: object) -> object:
+        if value is not None and int(value) > MAX_STORY_POINTS:
+            raise ValueError(_POINTS_ERROR)
+        return value
 
 
 class TaskUpdate(SQLModel):
@@ -55,6 +66,13 @@ class TaskUpdate(SQLModel):
     tag_ids: list[UUID] | None = None
     custom_field_values: TaskCustomFieldValues | None = None
     comment: NonEmptyStr | None = None
+
+    @field_validator("story_points", mode="before")
+    @classmethod
+    def cap_story_points(cls, value: object) -> object:
+        if value is not None and int(value) > MAX_STORY_POINTS:
+            raise ValueError(_POINTS_ERROR)
+        return value
 
     @field_validator("comment", mode="before")
     @classmethod
@@ -100,6 +118,25 @@ class TaskCommentRead(SQLModel):
 
     id: UUID
     message: str | None
+    actor_type: str | None = None
     agent_id: UUID | None
+    user_id: UUID | None = None
     task_id: UUID | None
+    created_at: datetime
+
+
+class TaskMovementRead(SQLModel):
+    """Structured task movement audit payload returned from read endpoints."""
+
+    id: UUID
+    task_id: UUID | None
+    board_id: UUID | None
+    message: str | None
+    actor_type: str | None = None
+    agent_id: UUID | None = None
+    user_id: UUID | None = None
+    previous_status: str | None = None
+    new_status: str | None = None
+    previous_assigned_agent_id: UUID | None = None
+    new_assigned_agent_id: UUID | None = None
     created_at: datetime
