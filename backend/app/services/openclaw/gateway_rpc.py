@@ -28,7 +28,11 @@ from app.services.openclaw.device_identity import (
     sign_device_payload,
 )
 
-PROTOCOL_VERSION = 3
+# Negotiated protocol range. OpenClaw gateway 2026.6.x bumped to protocol 4;
+# older gateways (pre-2026.6) speak protocol 3. We advertise the union so MC
+# works against either side during the upgrade window.
+PROTOCOL_VERSION = 4
+PROTOCOL_VERSION_MIN = 3
 # Resolved once at import time; matches the value written by the openclaw CLI
 # during pairing ("linux", "darwin", or "windows").
 _HOST_PLATFORM: str = _platform.system().lower()
@@ -331,7 +335,7 @@ def _build_connect_params(
     connect_mode = _resolve_connect_mode(config)
     use_control_ui = connect_mode == "control_ui"
     params: dict[str, Any] = {
-        "minProtocol": PROTOCOL_VERSION,
+        "minProtocol": PROTOCOL_VERSION_MIN,
         "maxProtocol": PROTOCOL_VERSION,
         "role": role,
         "scopes": scopes,
